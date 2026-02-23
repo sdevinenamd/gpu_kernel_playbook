@@ -249,12 +249,3 @@ tensor([2., 2., 2., 2., 2., 2., 2., 2., 2., 2.], device='cuda:0')
 
 ---
 
-## Flow Comparison
-
-| | Flow 1 (`gpu_kernel.py`) | Flow 2 (C++ Extension) |
-|---|---|---|
-| Build step | None (JIT) | `python setup.py build_ext --inplace` |
-| Kernel location | String in Python file | Separate `.cu` / `.hip` file |
-| PyTorch integration | `torch.cuda._compile_kernel` | `CUDAExtension` + pybind11 |
-| Use case | Prototyping, experimentation | Production, complex kernels |
-| HIP translation | Handled internally by PyTorch | `hipcc` called by PyTorch build system |
