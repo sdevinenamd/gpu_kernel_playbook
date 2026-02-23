@@ -6,7 +6,7 @@ A practical reference for writing, compiling, and running custom GPU kernels on 
 
 ## What is a GPU Kernel?
 
-A GPU kernel is a function that runs **in parallel across thousands of GPU threads simultaneously**. Unlike a CPU function that executes once per call, a kernel is launched with a **grid** of **blocks**, each containing many **threads** — all executing the same code on different data.
+A GPU kernel is a function that runs **in parallel across thousands of GPU threads simultaneously**. Unlike a CPU function that executes once per call, a kernel is launched with a **grid** of **blocks**, each containing many **threads**, all executing the same code on different data.
 
 ```
 Grid
@@ -14,12 +14,44 @@ Grid
      └── Thread[0..255]  (each processes one data element)
 ```
 
-Each thread computes its own index:
+### `__global__` — the kernel qualifier
+
+In HIP/CUDA, `__global__` marks a function as a GPU kernel:
+
+- It **runs on the GPU** (device)
+- It is **launched from the CPU** (host)
+- It **executes in parallel** across many GPU threads simultaneously
+
+```c
+__global__ void add_one(float* data, int n) { ... }
+```
+
+### Thread Indexing Model
+
+When launching a kernel you specify two dimensions:
+
+| Variable | Meaning |
+|---|---|
+| `gridDim` | Number of blocks in the grid |
+| `blockDim` | Number of threads per block |
+
+Each thread has access to three built-in read-only variables:
+
+| Variable | Meaning |
+|---|---|
+| `blockIdx.x` | Which block this thread belongs to |
+| `blockDim.x` | Number of threads in one block |
+| `threadIdx.x` | Thread index within its block |
+
+### Global Thread ID
+
+These variables are combined to compute a globally unique thread index:
+
 ```c
 int idx = blockIdx.x * blockDim.x + threadIdx.x;
 ```
 
-This index maps a thread to a specific element in memory.
+Total threads = `gridDim.x * blockDim.x`. Each thread processes one element independently — this is **data parallelism**. The same operation runs on many elements at once with no inter-thread dependency.
 
 ---
 
