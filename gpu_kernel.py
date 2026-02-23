@@ -15,7 +15,9 @@ __global__ void add_one(float* data, int n) {
 }
 """
 
-# Compile kernel
+print("HIP version:", torch.version.hip)
+print("Device:", torch.cuda.get_device_name(0))
+
 add_one_kernel = torch.cuda._compile_kernel(KERNEL_SOURCE, "add_one")
 
 x = torch.ones(100_000_000, dtype=torch.float32, device="cuda")
