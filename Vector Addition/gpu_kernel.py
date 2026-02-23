@@ -69,7 +69,7 @@ monitor_thread.join()
 
 print("Done.")
 
-if gpu_usage_log:s
+if gpu_usage_log:
     print(f"Peak GPU Utilization: {max(gpu_usage_log)}%")
     print(f"Average GPU Utilization: {sum(gpu_usage_log)/len(gpu_usage_log):.2f}%")
 else:
