@@ -1,15 +1,25 @@
 # Compile your own GPU Kernel Playbook
 
-A practical reference for writing, compiling, and running custom GPU kernels on AMD hardware using HIP and PyTorch.
+Write a custom GPU kernel from scratch, compile it, launch it on an AMD GPU, and watch the utilization spike. This playbook teaches you how GPU computation actually works by writing real kernel code and seeing it execute in parallel across thousands of threads.
+
+## What You'll Learn
+
+- How GPU kernels work: grids, blocks, threads, and the indexing model that maps them to data
+- How AMD's ROCm/HIP stack lets you write CUDA-style code that runs on AMD GPUs without modification
+- How to compile a kernel at runtime using `torch.cuda._compile_kernel`
+- How to build a native C++ kernel extension with `CUDAExtension` + pybind11, importable from Python
+- How to measure kernel execution time and monitor live GPU utilization with `rocm-smi`
+
+---
 
 This playbook covers two flows for kernel development:
 
 | | Flow | Entry point |
 |---|---|---|
-| **1** | High-level JIT compilation | `torch.cuda._compile_kernel` — write a kernel as a Python string, no build step |
-| **2** | Low-level C++ extension | `CUDAExtension` + pybind11 — compile a `.cu` file into a native `.so` and import it |
+| **1** | High-level JIT compilation | `torch.cuda._compile_kernel`, write a kernel as a Python string, no build step |
+| **2** | Low-level C++ extension | `CUDAExtension` + pybind11, compile a `.cu` file into a native `.so` and import it |
 
-Both flows run on AMD GPUs. This is possible because PyTorch's ROCm build **maps the entire CUDA API surface to HIP** — `torch.cuda`, `CUDAExtension`, and CUDA kernel syntax all work on AMD hardware transparently. You write CUDA-style code; ROCm handles the translation.
+Both flows run on AMD GPUs. This is possible because PyTorch's ROCm build **maps the entire CUDA API surface to HIP**, `torch.cuda`, `CUDAExtension`, and CUDA kernel syntax all work on AMD hardware transparently. You write CUDA-style code; ROCm handles the translation.
 
 ---
 
@@ -60,7 +70,7 @@ These variables are combined to compute a globally unique thread index:
 int idx = blockIdx.x * blockDim.x + threadIdx.x;
 ```
 
-Total threads = `gridDim.x * blockDim.x`. Each thread processes one element independently — this is **data parallelism**. The same operation runs on many elements at once with no inter-thread dependency.
+Total threads = `gridDim.x * blockDim.x`. Each thread processes one element independently, this is **data parallelism**. The same operation runs on many elements at once with no inter-thread dependency.
 
 ---
 
@@ -89,11 +99,11 @@ PyTorch ships a ROCm build where the CUDA API surface (`torch.cuda.*`) is transp
 - `tensor.to("cuda")` allocates on the AMD GPU
 - `torch.version.hip` exposes the HIP version
 
-PyTorch also exposes `torch.cuda._compile_kernel()` — a high-level shortcut to JIT-compile a raw kernel string and get back a callable, without needing a separate build step.
+PyTorch also exposes `torch.cuda._compile_kernel()`, a high-level shortcut to JIT-compile a raw kernel string and get back a callable, without needing a separate build step.
 
 ---
 
-## Setup
+## Getting Started
 
 ### 1. Uninstall Old Stack
 
@@ -120,7 +130,7 @@ Check your Ubuntu version first:
 # Download the installer (noble shown; swap for jammy if needed)
 wget https://repo.radeon.com/amdgpu-install/7.1.1/ubuntu/noble/amdgpu-install_7.1.1.70101-1_all.deb
 
-# Install the installer package
+# Install the package
 sudo DEBIAN_FRONTEND=noninteractive apt install -y ./amdgpu-install_7.1.1.70101-1_all.deb
 
 # Install ROCm + HIP
@@ -152,16 +162,16 @@ python3 -c "import torch; print(torch.cuda.is_available())"
 
 ### Example 1: Simple Vector Addition
 
-#### Flow 1 — High-Level: `gpu_kernel.py`
+#### Flow 1: High-Level: `add_one_kernel.py`
 
-The fast path. Kernel is written as a raw C++ string inside Python and compiled at runtime via PyTorch's built-in JIT.
+Kernel is written as a raw C++ string inside Python and compiled at runtime via PyTorch's built-in JIT.
 
-**Files:** [gpu_kernel.py](gpu_kernel.py)
+**Files:** [add_one_kernel.py](https://github.com/sdevinenamd/gpu_kernel_playbook/blob/main/Vector%20Addition/add_one_kernel.py)
 
 **How it works:**
 
 ```python
-# 1. Kernel source as a string — standard __global__ CUDA/HIP syntax
+# 1. Kernel source as a string
 KERNEL_SOURCE = """
 extern "C"
 __global__ void add_one(float* data, int n) {
@@ -173,7 +183,7 @@ __global__ void add_one(float* data, int n) {
 }
 """
 
-# 2. Compile the kernel string — PyTorch calls hipcc under the hood on ROCm
+# 2. Compile the kernel string, PyTorch calls hipcc under the hood on ROCm
 add_one_kernel = torch.cuda._compile_kernel(KERNEL_SOURCE, "add_one")
 
 # 3. Launch: specify grid/block dimensions and pass tensor args directly
@@ -186,15 +196,34 @@ add_one_kernel(
 
 The script also spawns a background thread that polls `rocm-smi` every 100ms to log peak and average GPU utilization during the kernel run.
 
-**Run:**
-```bash
-python gpu_kernel.py
+**What the workload actually does:**
+
+```
+100,000,000 elements in the tensor
+  × 1,000 inner loop iterations per kernel launch  →  +1,000 per element per launch
+  × 200 outer loop launches                        →  +200,000 per element total
+
+Starting value: 1.0
+Final value:    200,001.0  (per element)
 ```
 
+The inner `for (int i = 0; i < 1000; i++)` loop is artificial, its only purpose is to make each kernel launch run long enough for `rocm-smi` to capture meaningful utilization. Without it, 200 launches over 100M elements would complete near-instantly and the sampling thread would likely read very low GPU utilization.
+
+**Run:**
+```bash
+python add_one_kernel.py
+```
+
+**Expected output:**
+```
+Elapsed time: 2.347s
+Peak GPU Utilization: 94%
+Average GPU Utilization: 67.06%
+```
 
 ---
 
-#### Flow 2 — Low-Level: HIP C++ Extension
+#### Flow 2: Low-Level: HIP C++ Extension
 
 The full manual path: write the kernel and Python binding in a single `.cu` file, compile it as a native extension using PyTorch's build system, then import and call it from Python.
 
@@ -202,20 +231,20 @@ The full manual path: write the kernel and Python binding in a single `.cu` file
 
 | File | Role |
 |---|---|
-| [add_one_kernel.cu](add_one_kernel.cu) | Kernel + launcher + pybind11 binding — everything in one file |
-| [setup.py](setup.py) | Build script — uses `CUDAExtension` to compile the `.cu` into a `.so` |
+| [add_one_kernel.cu](Vector%20Addition/add_one_kernel.cu) | Kernel + launcher + pybind11 binding, everything in one file |
+| [setup.py](Vector%20Addition/setup.py) | Build script, uses `CUDAExtension` to compile the `.cu` into a `.so` |
 
 **How it works:**
 
-**Step 1 — The kernel, launcher, and binding** ([add_one_kernel.cu](add_one_kernel.cu)):
+**Step 1: The kernel, launcher, and binding** ([add_one_kernel.cu](Vector%20Addition/add_one_kernel.cu)):
 ```cpp
-// GPU kernel — one thread per element
+// GPU kernel, one thread per element
 __global__ void add_one(float* data, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) data[idx] += 1.0f;
 }
 
-// Launcher — bridges torch::Tensor to raw pointer, sets grid/block, runs kernel
+// Launcher, bridges torch::Tensor to raw pointer, sets grid/block, runs kernel
 void add_one_launcher(torch::Tensor tensor) {
     int n = tensor.numel();
     float* data = tensor.data_ptr<float>();
@@ -225,19 +254,19 @@ void add_one_launcher(torch::Tensor tensor) {
     hipDeviceSynchronize();
 }
 
-// Python binding — exposes add_one_launcher as add_one_ext.add_one
+// Python binding, exposes add_one_launcher as add_one_ext.add_one
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("add_one", &add_one_launcher, "Add one kernel (HIP)");
 }
 ```
 
-**Step 2 — Build** ([setup.py](setup.py)):
+**Step 2: Build** ([setup.py](Vector%20Addition/setup.py)):
 ```bash
 python setup.py build_ext --inplace
 ```
-`CUDAExtension` is a CUDA build helper from `torch.utils.cpp_extension`. On AMD with ROCm, PyTorch **remaps `CUDAExtension` to use `hipcc`** instead of `nvcc` — so the same `setup.py` that would build a CUDA extension on NVIDIA compiles to AMD GPU code without any changes. This is the key mechanism that makes CUDA extension code portable to AMD: PyTorch's ROCm build intercepts the build path and routes it through the HIP compiler. Produces `add_one_ext.cpython-*.so` in the same directory.
+`CUDAExtension` is a CUDA build helper from `torch.utils.cpp_extension`. On AMD with ROCm, PyTorch **remaps `CUDAExtension` to use `hipcc`** instead of `nvcc`, so the same `setup.py` that would build a CUDA extension on NVIDIA compiles to AMD GPU code without any changes. This is the key mechanism that makes CUDA extension code portable to AMD: PyTorch's ROCm build intercepts the build path and routes it through the HIP compiler. Produces `add_one_ext.cpython-*.so` in the same directory.
 
-**Step 3 — Use from Python:**
+**Step 3: Use from Python:**
 ```python
 import add_one_ext
 import torch
@@ -260,15 +289,15 @@ tensor([2., 2., 2., 2., 2., 2., 2., 2., 2., 2.], device='cuda:0')
 
 ### Example 2: Matrix Multiplication
 
-Given matrices **A** (M×N) and **B** (N×P), compute **C = A @ B** (M×P). Each element `C[i][j]` is the dot product of row `i` of A with column `j` of B, completely independent of every other output element, making this a natural fit for GPU parallelism.
+Given matrices **A** (M×N) and **B** (N×P), compute **C = A * B** (M×P). Each element `C[i][j]` is the dot product of row `i` of A with column `j` of B, completely independent of every other output element, making this a natural fit for GPU parallelism.
 
 #### The Math
 
 Each output element is defined as:
 
-$$C[row,\; col] = \sum_{k=0}^{N-1} A[row,\; k] \cdot B[k,\; col]$$
+$$C[row, col] = \sum_{k=0}^{N-1} A[row, k] \cdot B[k, col]$$
 
-Every output element is **independent** — thread `(row, col)` computes exactly one dot product without needing results from any other thread.
+Each output element is assigned to exactly one thread, and threads don't depend on each other's results, thread `(0,0)` and thread `(1,5)` run simultaneously with no coordination. However, within a single thread the dot product is **sequential**: the `k` loop iterates N times, accumulating one multiply-add per step.
 
 #### Row-Major Memory Layout
 
@@ -287,28 +316,26 @@ Stored in memory:
 
 To reach `A[row][col]`, skip `row` full rows (each `N` elements wide), then advance `col` steps:
 
-$$A[row,\; col] \;\equiv\; A[row \times N + col]$$
+$$A[row, col] = A[row \times N + col]$$
 
-The same principle applies to B (column width P) and C (column width P):
+The same principle applies to B (column width P):
 
-$$B[k,\; col] \;\equiv\; B[k \times P + col]$$
-
-$$C[row,\; col] \;\equiv\; C[row \times P + col]$$
+$$B[k, col] = B[k \times P + col]$$
 
 Substituting into the matmul formula gives the exact inner loop in the kernel:
 
-$$C[row \times P + col] = \sum_{k=0}^{N-1} A[row \times N + k] \;\cdot\; B[k \times P + col]$$
+$$C[row, col] = \sum_{k=0}^{N-1} A[row \times N + k] \cdot B[k \times P + col]$$
 
 #### 2D thread indexing
 
-Vector addition maps one thread to one element of a 1D array. Matrix multiplication maps one thread to one element of a 2D output matrix — so the natural launch shape is a **2D grid of 2D blocks**.
+Vector addition maps one thread to one element of a 1D array. Matrix multiplication maps one thread to one element of a 2D output matrix, so the natural launch shape is a **2D grid of 2D blocks**.
 
 | | Vector Addition | Matrix Multiplication |
 |---|---|---|
 | Output shape | 1D vector, length N | 2D matrix, M×P |
 | Thread grid | 1D: `(grid_x, 1, 1)` | 2D: `(grid_x, grid_y, 1)` |
-| Thread block | 1D: `(256, 1, 1)` | 2D: `(16, 16, 1)` = 256 threads |
-| Thread index | `idx = blockIdx.x * blockDim.x + threadIdx.x` | `row = blockIdx.y * blockDim.y + threadIdx.y` / `col = blockIdx.x * blockDim.x + threadIdx.x` |
+| Thread block | 1D: `(256, 1, 1)` = 256 threads | 2D: `(16, 16, 1)` = 256 threads |
+| Thread index | `idx = blockIdx.x * blockDim.x + threadIdx.x` | `row = blockIdx.y * blockDim.y + threadIdx.y` & `col = blockIdx.x * blockDim.x + threadIdx.x` |
 | Work per thread | `data[idx] += 1` | `C[row][col] = Σ A[row][k] * B[k][col]` |
 
 The block is still 256 threads total (16×16), matching the convention from Example 1, but arranged in a square to align naturally with the 2D output.
@@ -327,16 +354,16 @@ grid_y = ceil(M / 16)   # enough blocks to span all M rows
 
 ---
 
-#### Flow 1 — High-Level: `matmul_kernel.py`
+#### Flow 1: High-Level: `matmul_kernel.py`
 
-The fast path. Kernel is written as a raw C++ string inside Python and compiled at runtime via PyTorch's built-in JIT. Identical workflow to Example 1, only the kernel body and launch dimensions change.
+Kernel is written as a raw C++ string inside Python and compiled at runtime via PyTorch's built-in JIT. Identical workflow to Example 1, only the kernel body and launch dimensions change.
 
 **Files:** [matmul_kernel.py](Matrix%20Multiplication/matmul_kernel.py)
 
 **How it works:**
 
 ```python
-# 1. Kernel source — 2D indexing to map threads onto the M×P output matrix
+# 1. Kernel source, 2D indexing to map threads onto the M×P output matrix
 KERNEL_SOURCE = """
 extern "C"
 __global__ void matmul(float* A, float* B, float* C, int M, int N, int P) {
@@ -356,7 +383,7 @@ __global__ void matmul(float* A, float* B, float* C, int M, int N, int P) {
 # 2. Compile the kernel string
 matmul_kernel = torch.cuda._compile_kernel(KERNEL_SOURCE, "matmul")
 
-# 3. Launch with a 2D grid — grid_x covers columns (P), grid_y covers rows (M)
+# 3. Launch with a 2D grid, grid_x covers columns (P), grid_y covers rows (M)
 BLOCK = 16
 matmul_kernel(
     grid=(grid_x, grid_y, 1),
@@ -368,7 +395,6 @@ matmul_kernel(
 The row-major memory layout of the tensors maps directly to how the kernel indexes the flat pointers:
 - `A[row * N + k]` — row `row`, column `k`
 - `B[k * P + col]`  — row `k`, column `col`
-- `C[row * P + col]` — row `row`, column `col`
 
 The script spawns the same background monitoring thread from Example 1 (`rocm-smi` polled every 100ms) and verifies the result against `torch.mm`.
 
@@ -379,36 +405,29 @@ python matmul_kernel.py
 
 **Expected output:**
 ```
-HIP version: 6.x.x
-Device: AMD Radeon ...
-Matrix dims: A(1024x512) @ B(512x768) -> C(1024x768)
-Running matmul kernel...
-Done.
-Max error vs torch.mm: 0.000031
-Peak GPU Utilization:    97%
-Average GPU Utilization: 84.30%
+####
 ```
 
 ---
 
-#### Flow 2 — Low-Level: HIP C++ Extension
+#### Flow 2: Low-Level: HIP C++ Extension
 
-The full manual path: write the kernel and Python binding in a `.cu` file, compile it as a native extension, then import and call it from Python. Mirrors the structure of `add_one_kernel.cu` exactly — only the kernel signature and launcher logic differ.
+The full manual path: write the kernel and Python binding in a `.cu` file, compile it as a native extension, then import and call it from Python. Mirrors the structure of `add_one_kernel.cu` exactly, only the kernel signature and launcher logic differ.
 
 **Files:**
 
 | File | Role |
 |---|---|
 | [matmul_kernel.cu](Matrix%20Multiplication/matmul_kernel.cu) | Kernel + launcher + pybind11 binding |
-| [setup.py](Matrix%20Multiplication/setup.py) | Build script — uses `CUDAExtension` to compile the `.cu` into a `.so` |
+| [setup.py](Matrix%20Multiplication/setup.py) | Build script, uses `CUDAExtension` to compile the `.cu` into a `.so` |
 
 **How it works:**
 
-**Step 1 — The kernel, launcher, and binding** ([matmul_kernel.cu](Matrix%20Multiplication/matmul_kernel.cu)):
+**Step 1: The kernel, launcher, and binding** ([matmul_kernel.cu](Matrix%20Multiplication/matmul_kernel.cu)):
 ```cpp
 #define BLOCK 16
 
-// GPU kernel — one thread per output element of C
+// GPU kernel, one thread per output element of C
 __global__ void matmul(float* A, float* B, float* C, int M, int N, int P) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -422,7 +441,7 @@ __global__ void matmul(float* A, float* B, float* C, int M, int N, int P) {
     }
 }
 
-// Launcher — extracts dims from torch::Tensor, allocates C, sets 2D grid/block
+// Launcher, extracts dims from torch::Tensor, allocates C, sets 2D grid/block
 torch::Tensor matmul_launcher(torch::Tensor A, torch::Tensor B) {
     int M = A.size(0), N = A.size(1), P = B.size(1);
     auto C = torch::zeros({M, P}, A.options());
@@ -436,7 +455,7 @@ torch::Tensor matmul_launcher(torch::Tensor A, torch::Tensor B) {
     return C;
 }
 
-// Python binding — exposes matmul_launcher as matmul_ext.matmul
+// Python binding, exposes matmul_launcher as matmul_ext.matmul
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("matmul", &matmul_launcher, "Naive matmul kernel (HIP): A(M,N) @ B(N,P) -> C(M,P)");
 }
@@ -444,18 +463,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
 Compared to `add_one_launcher` in Example 1, the launcher here:
 - Takes **two** input tensors instead of one
-- Derives all three dimensions (M, N, P) from tensor shapes — no manual size passing from Python
+- Derives all three dimensions (M, N, P) from tensor shapes, no manual size passing from Python
 - Allocates and **returns** the output tensor C, rather than mutating in-place
 - Uses `dim3` for both grid and block to express the 2D launch shape
 
-**Step 2 — Build** ([setup.py](Matrix%20Multiplication/setup.py)):
+**Step 2: Build** ([setup.py](Matrix%20Multiplication/setup.py)):
 ```bash
 cd "Matrix Multiplication"
 python setup.py build_ext --inplace
 ```
 Produces `matmul_ext.cpython-*.so` in the same directory. The same `CUDAExtension` → `hipcc` remapping as Example 1 applies here unchanged.
 
-**Step 3 — Use from Python:**
+**Step 3: Use from Python:**
 ```python
 import matmul_ext
 import torch
@@ -474,4 +493,3 @@ tensor(3.1e-05, device='cuda:0')
 ```
 
 ---
-

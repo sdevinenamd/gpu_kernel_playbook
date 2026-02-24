@@ -55,6 +55,8 @@ monitor_thread.start()
 
 print("Running kernel...")
 
+start = time.perf_counter()
+
 for _ in range(200):
     add_one_kernel(
         grid=(grid_size, 1, 1),
@@ -64,10 +66,12 @@ for _ in range(200):
 
 torch.cuda.synchronize()
 
+end = time.perf_counter()
+
 monitoring = False
 monitor_thread.join()
 
-print("Done.")
+print(f"Elapsed time: {end - start:.3f}s")
 
 if gpu_usage_log:
     print(f"Peak GPU Utilization: {max(gpu_usage_log)}%")

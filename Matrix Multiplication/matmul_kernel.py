@@ -5,7 +5,7 @@ import time
 import re
 
 # A is M x N, B is N x P, C is M x P
-M, N, P = 102400, 51200, 768000
+M, N, P = 1024, 512, 768
 
 KERNEL_SOURCE = """
 extern "C"
@@ -77,9 +77,8 @@ torch.cuda.synchronize()
 monitoring = False
 monitor_thread.join()
 
-print("Done.")
 
-# Verify against torch.mm
+# Verify the output against torch.mm
 C_ref = torch.mm(A, B)
 max_err = (C - C_ref).abs().max().item()
 print(f"Max error vs torch.mm: {max_err:.6f}")

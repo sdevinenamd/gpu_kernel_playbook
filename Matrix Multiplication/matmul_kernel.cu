@@ -3,9 +3,6 @@
 
 #define BLOCK 16
 
-// A: M x N (row-major)
-// B: N x P (row-major)
-// C: M x P (row-major)
 __global__ void matmul(float* A, float* B, float* C, int M, int N, int P) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
