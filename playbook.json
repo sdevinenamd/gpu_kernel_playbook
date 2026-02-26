@@ -1,0 +1,12 @@
+{
+  "id": "custom-gpu-kernel",
+  "title": "Compile Your Own GPU Kernel",
+  "description": "Write, compile, and launch GPU kernels on AMD GPUs using HIP/ROCm, with hands-on vector add and matrix multiplication examples.",
+  "time": 60,
+  "platforms": ["linux"],
+  "difficulty": "intermediate",
+  "isNew": false,
+  "isFeatured": false,
+  "published": true,
+  "tags": ["gpu", "hip", "rocm", "kernel", "pytorch", "parallel-programming"]
+}
