@@ -509,3 +509,11 @@ tensor([[19., 22.],
 >>> (C - torch.mm(A, B)).abs().max()
 tensor(0., device='cuda:0')
 ```
+
+---
+
+## Next Steps
+
+- Each partial product A[row][k]*B[k][col] is independent; partial sums can be computed by separate threads then atomically reduced
+
+- One thread computes 1 output; it could compute a 4×4 tile of outputs, reusing the same loaded A/B values across 16 independent accumulations in registers
